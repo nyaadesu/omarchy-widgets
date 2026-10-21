@@ -508,8 +508,9 @@ widget "nostalgia player" {
         rect(0, 0, width, height, fill: cHi)
         rect(0, 0, width - 1.5, height - 1.5, fill: cLo)
         rect(1.5, 1.5, width - 3, height - 3, fill: cLcd)
+        // Scrolls only while music plays: reading `time` redraws the tile every frame.
         clip(5, 1, width - 10, height - 2) {
-          if est <= room {
+          if est <= room || !playing {
             text(banner, 6, height / 2, size: 12, bold: true, color: cLit)
           } else {
             let x = 6 - (time * 28) % loop
