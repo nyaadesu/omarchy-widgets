@@ -1,0 +1,966 @@
+widget "my retro amp" {
+  page: 2
+  order: 3
+  size: 6x3
+  minSize: 4x2
+  padding: 0
+
+  meta { owl: 5; description: "A late-90s style music player for whatever is playing on the phone: animated spectrum, scrolling title, cover and song history, in classic or theme colors."; version: "1.2"; license: "MIT"; category: "fun" }
+
+  // Android's media sessions (YouTube Music, or any other player) and the media volume.
+  source m = android.media
+  source v = android.volume
+  source now = clock every 1m
+
+  // Tap the title bar to switch between the classic skin and the Omarchy theme's colors.
+  state skin = "classic" persist
+  let classic = skin == "classic"
+
+  // The player eject opens when nothing is playing: the last app that played something,
+  // unless one is picked in the screen's settings (pinned).
+  state player = "" persist
+  state playerName = "" persist
+  state pinned = false persist
+  on m.package { player = pinned ? player : value; playerName = pinned ? playerName : m.app ?? value }
+  // `on` skips the first value, so this catches the app already playing when the widget loads.
+  when m.package != null { player = pinned ? player : m.package; playerName = pinned ? playerName : m.app ?? m.package }
+  let ejectHint = player != "" ? "eject opens ${playerName}" : "play something on the phone"
+  state settings = false
+  // Common players. The launcher can't list installed apps, so this is a fixed list plus a free field.
+  let players = [
+    {name: "Metrolist", pkg: "com.metrolist.music"},
+    {name: "YouTube Music", pkg: "com.google.android.apps.youtube.music"},
+    {name: "Spotify", pkg: "com.spotify.music", search: "https://open.spotify.com/search/"},
+    {name: "Poweramp", pkg: "com.maxmpz.audioplayer"},
+    {name: "VLC", pkg: "org.videolan.vlc"},
+    {name: "Apple Music", pkg: "com.apple.android.music", search: "https://music.apple.com/search?term="},
+    {name: "Deezer", pkg: "deezer.android.app", search: "https://www.deezer.com/search/"},
+    {name: "Tidal", pkg: "com.aspiro.tidal", search: "https://listen.tidal.com/search?q="},
+    {name: "SoundCloud", pkg: "com.soundcloud.android", search: "https://soundcloud.com/search?q="},
+    {name: "Plexamp", pkg: "tv.plex.labs.plexamp"},
+    {name: "Auxio", pkg: "org.oxycblt.auxio"},
+    {name: "Pocket Casts", pkg: "au.com.shiftyjelly.pocketcasts"}
+  ]
+
+  // Classic is Winamp 2's base skin.
+  let cBody = classic ? #2b2b3f : surface
+  // Recessed boxes: dark top and left edge, light bottom and right edge.
+  let cHi = classic ? #75758c : border
+  let cLo = classic ? #222235 : background
+  let cTitle = classic ? #e4e4ee : foreground
+  let cStripe = classic ? #d8b24a : accent
+  let cGold = classic ? [#f6e6a8, #c8a050, #8c6a28] : [accent, accent]
+  let cLcd = classic ? #000000 : background
+  let cLit = classic ? #00e800 : accent
+  let cDim = classic ? #1b4a1b : muted
+  let cDot = classic ? #2a3340 : alpha(muted, 0.3)
+  let cLabel = classic ? #d8dce8 : foreground
+  let cOff = classic ? #6a6a82 : muted
+  let cInk = classic ? #2c3346 : foreground
+  let cEdge = classic ? #1d2030 : background
+  let cSeg = classic ? #0c220c : alpha(muted, 0.12)
+  let cFrame = classic ? [#36384f, #222338] : [surface, surface]
+  // The colors of Winamp's button bitmaps, by the letters the sprites below use.
+  let kPal = classic ? {E: #adb5c6, W: #efffff, F: #bdced6, M: #97a8b9, D: #4a5a6b, S: #7b8494, K: #526373, L: #8494a5}
+    : {E: border, W: alpha(foreground, 0.45), F: surface, M: muted, D: background, S: alpha(foreground, 0.2), K: background, L: muted}
+  let cVis = classic ? [#10c010, #c8d818, #e8a018, #e83818] : [accent, foreground]
+
+  let has = m.available && m.title != null
+  let playing = has && m.playing
+  let dur = m.duration ?? 0
+  let pos = has ? clamp(m.position ?? 0, 0, dur > 0 ? dur : 359999) : 0
+  let clockText = "${pad(floor(pos / 60), 2, "0")}:${pad(floor(pos) % 60, 2, "0")}"
+  let durText = "${floor(dur / 60)}:${pad(floor(dur) % 60, 2, "0")}"
+  let rem = max(0, dur - pos)
+  let remText = "${floor(rem / 60)}:${pad(floor(rem) % 60, 2, "0")}"
+
+  // A number per song for the spectrum, from its artist and title.
+  let seedChars = split("abcdefghijklmnopqrstuvwxyz0123456789", "")
+  let seed = has ? sum(map(take(split(lower("${m.artist ?? ""}${m.title}"), ""), 48), c => indexOf(seedChars, c) + 2)) + len(m.title) * 13 : 0
+  // Bars shrink with the volume and lie flat when muted.
+  let gain = v.muted ? 0 : sqrt(clamp(num(v.level, 60) / 100, 0, 1))
+
+  let byWho = m.artist ?? m.app ?? ""
+  let banner = !m.available ? "*** NEEDS NOTIFICATION ACCESS - TAP EJECT ***"
+    : m.title == null ? "*** NOTHING PLAYING - ${upper(ejectHint)} ***"
+    : "${byWho == "" ? "" : "${byWho} - "}${m.title}${dur > 0 ? " (${durText})" : ""}"
+
+  // The banner's width in dp at 12 sp: ASCII is narrow, anything else (CJK, mostly) counts double.
+  let narrowChars = """ !"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"""
+  let bannerWidth = sum(map(split(banner, ""), c => contains(narrowChars, c) ? 7.8 : 15.6))
+
+  // Short tiles (under 3 rows) drop the info box; narrow ones (under 5 columns) the art.
+  let short = (rows ?? 3) < 3
+  let narrow = (cols ?? 6) < 5
+  // Either way the display and its digits shrink.
+  let compact = short || narrow
+  // The art panel sits beside the display, with the volume under it when the tile is tall enough.
+  let docked = !narrow
+  let volUnderArt = docked && !short
+  // Tall tiles (4+ rows): bigger keys, the readouts under the art, and the art as big as fits.
+  let tall = docked && (rows ?? 3) >= 4
+  let keyW = tall ? 44 : 34
+  let keysH = tall ? 46 : 36
+  // Width beside the display, of which the art takes at most a little over half.
+  let sideW = (tileWidth ?? 400) - 12 - (compact ? 92 : 124) - 6
+  let artSize = tall ? clamp(min((tileHeight ?? 260) - 40 - keysH - 26 - 26 - 4 - 14, sideW * 0.55), 32, 400)
+    : clamp((tileHeight ?? 130) - 76 - (volUnderArt ? 26 : 0), 32, 150)
+
+  // Songs seen so far, newest first. Only noticed while the tile's page or the screen is showing.
+  state hist = [] persist
+  state histId = 0 persist
+  let song = {title: m.title, artist: m.artist ?? m.app ?? ""}
+  let pushed = m.title == null || (first(hist).title == song.title && first(hist).artist == song.artist) ? hist
+    : take(flatten([[{id: histId + 1, title: song.title, artist: song.artist, pkg: m.package, at: now ?? 0}], hist]), 50)
+  on m.title { hist = pushed; histId = histId + 1 }
+  // `on` skips the first value, so this catches a song already playing when the widget loads.
+  when m.title != null { hist = pushed; histId = histId + 1 }
+  // Songs before this one, for the info box's spare room on tall tiles.
+  let earlier = take(filter(hist, h => h.title != m.title), tall ? 3 + max(0, (rows ?? 4) - 4) * 4 : 0)
+  let coverSize = min((screenWidth ?? 360) - 24, (screenHeight ?? 700) * 0.45)
+
+  // Winamp's own key bitmaps (22 x 17, eject 22 x 16), pixel for pixel: raised bevel, engraved symbol.
+  let artPrev = [
+    "EEEEEEEEEEEEEEEEEEEEEL",
+    "EWWWWWWWWWWWWWWWWWWWEK",
+    "EWFFFFFFFFFFFFFFFFFELD",
+    "EWFFFFFFFFFFFFFFFFFELD",
+    "EWFFFFDDDFFFFFDDFFFESD",
+    "EWFFFFDMWFFFFDMWFFFESD",
+    "EWFFFFDMWFFFDMMWFFFESD",
+    "EWFFFFDMWFFDMMMWFFFESD",
+    "EWFFFFDMWFDMMMMWFFFESD",
+    "EWFFFFDMWFWMMMMWFFFESD",
+    "EWFFFFDMWFFWMMMWFFFESD",
+    "EWFFFFDMWFFFWMMWFFFESD",
+    "EWFFFFDMWFFFFWMWFFFESD",
+    "EWFFFFWWWFFFFFWWFFFESD",
+    "EWEEEEEEEEEEEEEEEEEESD",
+    "EELSSSSSSSSSSSSSSSSSSD",
+    "LKDDDDDDDDDDDDDDDDDDDD"
+  ]
+  let artPlay = [
+    "EEEEEEEEEEEEEEEEEEEEEL",
+    "EWWWWWWWWWWWWWWWWWWWEK",
+    "EWFFFFFFFFFFFFFFFFFELD",
+    "EWFFFFFFFFFFFFFFFFFELD",
+    "EWFFFFDDFFFFFFFFFFFESD",
+    "EWFFFFDMDDFFFFFFFFFESD",
+    "EWFFFFDMMMDDFFFFFFFESD",
+    "EWFFFFDMMMMMDDFFFFFESD",
+    "EWFFFFDMMMMMMMDDFFFESD",
+    "EWFFFFDMMMMMMMWWFFFESD",
+    "EWFFFFDMMMMMWWFFFFFESD",
+    "EWFFFFDMMMWWFFFFFFFESD",
+    "EWFFFFDMWWFFFFFFFFFESD",
+    "EWFFFFWWFFFFFFFFFFFESD",
+    "EWEEEEEEEEEEEEEEEEEESD",
+    "EELSSSSSSSSSSSSSSSSSSD",
+    "LKDDDDDDDDDDDDDDDDDDDD"
+  ]
+  let artPause = [
+    "EEEEEEEEEEEEEEEEEEEEEL",
+    "EWWWWWWWWWWWWWWWWWWWEK",
+    "EWFFFFFFFFFFFFFFFFFELD",
+    "EWFFFFFFFFFFFFFFFFFELD",
+    "EWFFFDDDDFFFDDDDFFFESD",
+    "EWFFFDMMWFFFDMMWFFFESD",
+    "EWFFFDMMWFFFDMMWFFFESD",
+    "EWFFFDMMWFFFDMMWFFFESD",
+    "EWFFFDMMWFFFDMMWFFFESD",
+    "EWFFFDMMWFFFDMMWFFFESD",
+    "EWFFFDMMWFFFDMMWFFFESD",
+    "EWFFFDMMWFFFDMMWFFFESD",
+    "EWFFFDMMWFFFDMMWFFFESD",
+    "EWFFFWWWWFFFWWWWFFFESD",
+    "EWEEEEEEEEEEEEEEEEEESD",
+    "EELSSSSSSSSSSSSSSSSSSD",
+    "LKDDDDDDDDDDDDDDDDDDDD"
+  ]
+  let artStop = [
+    "EEEEEEEEEEEEEEEEEEEEEL",
+    "EWWWWWWWWWWWWWWWWWWWEK",
+    "EWFFFFFFFFFFFFFFFFFELD",
+    "EWFFFFFFFFFFFFFFFFFELD",
+    "EWFFFFDDDDDDDDDDFFFESD",
+    "EWFFFFDMMMMMMMMWFFFESD",
+    "EWFFFFDMMMMMMMMWFFFESD",
+    "EWFFFFDMMMMMMMMWFFFESD",
+    "EWFFFFDMMMMMMMMWFFFESD",
+    "EWFFFFDMMMMMMMMWFFFESD",
+    "EWFFFFDMMMMMMMMWFFFESD",
+    "EWFFFFDMMMMMMMMWFFFESD",
+    "EWFFFFDMMMMMMMMWFFFESD",
+    "EWFFFFWWWWWWWWWWFFFESD",
+    "EWEEEEEEEEEEEEEEEEEESD",
+    "EELSSSSSSSSSSSSSSSSSSD",
+    "LKDDDDDDDDDDDDDDDDDDDD"
+  ]
+  let artNext = [
+    "EEEEEEEEEEEEEEEEEEEEEL",
+    "EWWWWWWWWWWWWWWWWWWWEK",
+    "EWFFFFFFFFFFFFFFFFFELD",
+    "EWFFFFFFFFFFFFFFFFFELD",
+    "EWFFFFDDFFFFFDDDFFFESD",
+    "EWFFFFDMDFFFFDMWFFFESD",
+    "EWFFFFDMMDFFFDMWFFFESD",
+    "EWFFFFDMMMDFFDMWFFFESD",
+    "EWFFFFDMMMMDFDMWFFFESD",
+    "EWFFFFDMMMMWFDMWFFFESD",
+    "EWFFFFDMMMWFFDMWFFFESD",
+    "EWFFFFDMMWFFFDMWFFFESD",
+    "EWFFFFDMWFFFFDMWFFFESD",
+    "EWFFFFWWFFFFFWWWFFFESD",
+    "EWEEEEEEEEEEEEEEEEEESD",
+    "EELSSSSSSSSSSSSSSSSSSD",
+    "LKDDDDDDDDDDDDDDDDDDDD"
+  ]
+  let artEject = [
+    "EEEEEEEEEEEEEEEEEEEEEL",
+    "EWWWWWWWWWWWWWWWWWWWEK",
+    "EWFFFFFFFFFFFFFFFFFESD",
+    "EWFFFFFFFFDFFFFFFFFESD",
+    "EWFFFFFFFDMDFFFFFFFESD",
+    "EWFFFFFFDMMMDFFFFFFESD",
+    "EWFFFFFDMMMMMDFFFFFESD",
+    "EWFFFFDMMMMMMMDFFFFESD",
+    "EWFFFWWWWWWWWWWWFFFESD",
+    "EWFFFFFFFFFFFFFFFFFESD",
+    "EWFFFDDDDDDDDDDDFFFESD",
+    "EWFFFDMMMMMMMMMWFFFESD",
+    "EWFFFWWWWWWWWWWWFFFESD",
+    "EWEEEEEEEEEEEEEEEEEESD",
+    "EELSSSSSSSSSSSSSSSSSSD",
+    "LKDDDDDDDDDDDDDDDDDDDD"
+  ]
+
+  // A key drawn from its bitmap at whole-bitmap scale; `lit` fills the engraved symbol like the display.
+  component Key(kind, lit = false) {
+    Canvas {
+      let art = kind == "prev" ? artPrev : kind == "play" ? artPlay : kind == "pause" ? artPause
+        : kind == "stop" ? artStop : kind == "next" ? artNext : artEject
+      let px = min(width / 22, height / len(art))
+      sprite(art, round((width - 22 * px) / 2), round((height - len(art) * px) / 2), px,
+        palette: lit ? {E: kPal.E, W: kPal.W, F: kPal.F, M: cLit, D: kPal.D, S: kPal.S, K: kPal.K, L: kPal.L} : kPal)
+    }
+  }
+
+  // Winamp's PL button (22 x 11): its bitmap, with the LED lit or dark.
+  let artPl = [
+    "EEEEEEEEEEEEEEEEEEEEEL",
+    "EWWWWWWWWWWWWWWWWWWWEK",
+    "EWFFFFFFFFFFFFFFFFFFSD",
+    "EWFFDDDDFFTTTFTFFFFFSD",
+    "EWFFDGGQFFTFTFTFFFFFSD",
+    "EWFFDGGQFFTTTFTFFFFFSD",
+    "EWFFDQQQFFTFFFTFFFFFSD",
+    "EWFFFFFFFFTFFFTTTFFFSD",
+    "EWFFFFFFFFFFFFFFFFFFSD",
+    "EESSSSSSSSSSSSSSSSSSSD",
+    "LKDDDDDDDDDDDDDDDDDDDD"
+  ]
+  component PlButton(lit = false) {
+    Canvas {
+      let px = min(width / 22, height / 11)
+      sprite(artPl, round((width - 22 * px) / 2), round((height - 11 * px) / 2), px,
+        palette: {E: kPal.E, W: kPal.W, F: kPal.F, D: kPal.D, S: kPal.S, K: kPal.K, L: kPal.L, T: classic ? #2f374d : foreground, Q: classic ? #d5def2 : border, G: lit ? cLit : cDim})
+    }
+  }
+
+  // Winamp's gold position knob (29 x 10), with its engraved slot.
+  let artSeek = [
+    "zxxxxxxxxxxxxxxxxxxxxxxxxxxxy",
+    "zxAAAAAAAAAAAAAAAAAAAAAAAAByC",
+    "zxAEFFFFFFFFFFFFFFFFFFFFFBGyC",
+    "zxAFBBBBBBBBBBBBBBBBBBBBBFGyC",
+    "zxAFLLLLLLLLLLLLLLLLLLLLLFGyC",
+    "zxAFGGGGGGGGGGGGGGGGGGGGGFGyC",
+    "zxABFFFFFFFFFFFFFFFFFFFFFOGyC",
+    "zxBPGGGGGGGGGGGGGGGGGGGGGGLyC",
+    "zxyyyyyyyyyyyyyyyyyyyyyyyyyyC",
+    "zCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+  ]
+  let seekPal = classic ? {z: #656573, x: #dbcb9e, y: #8d753a, C: #090202, A: #836930, E: #c5b27e, F: #f4eac7, B: #f5f5f5, G: #af9861, L: #755b22, O: #9c824a, P: #eee2bb}
+    : {z: background, x: accent, y: accent, C: background, A: accent, E: accent, F: foreground, B: foreground, G: accent, L: background, O: accent, P: foreground}
+
+  // A Winamp-style text button for the screen: raised bevel, engraved label.
+  component TextKey(label) {
+    Canvas {
+      rect(0, 0, width, height, fill: kPal.D)
+      rect(0, 0, width - 1.5, height - 1.5, fill: kPal.S)
+      rect(0, 0, width - 3, height - 3, fill: kPal.E)
+      rect(1.5, 1.5, width - 4.5, height - 4.5, fill: kPal.W)
+      rect(3, 3, width - 6, height - 6, fill: kPal.F)
+      text(label, width / 2 + 0.75, height / 2 + 0.75, size: 10, bold: true, align: center, color: kPal.W)
+      text(label, width / 2, height / 2, size: 10, bold: true, align: center, color: kPal.D)
+    }
+  }
+
+  // One player in the settings list: an LED that's lit for the pinned one, its icon and name.
+  component PlayerRow(name, pkg) {
+    let on = pinned && pkg == player
+    Row {
+      gap: 8
+      fill: width
+      align: center
+      padding: [8, 6]
+      background: on ? alpha(cLit, 0.14) : cLcd
+      onTap: { player = pkg; playerName = name; pinned = true }
+      Canvas {
+        width: 9
+        height: 9
+        rect(0, 0, 9, 9, fill: cHi)
+        rect(0, 0, 7.5, 7.5, fill: cLo)
+        rect(1.5, 1.5, 6, 6, fill: on ? cLit : cDim)
+      }
+      // Only installed apps have an icon, so an empty slot means it isn't on the phone.
+      Box { size: 24; Image { src: "app:${pkg}"; size: 24 } }
+      Column {
+        gap: 0
+        weight: 1
+        Text { text: name; fontSize: 13; bold: on; color: on ? cTitle : cLit; maxLines: 1 }
+        Text { text: pkg; font: mono; fontSize: 9; color: cOff; maxLines: 1 }
+      }
+    }
+  }
+
+  // Position bar: a recessed track. Android gives no way to seek, so it only shows where the song is.
+  component SeekBar() {
+    Canvas {
+      let x0 = 6
+      let room = width - 12
+      let px = height / 10
+      let knob = 29 * px
+      let f = dur > 0 ? clamp(pos / dur, 0, 1) : 0
+      rect(x0, 0, room, height, fill: classic ? #686877 : border)
+      rect(x0, 0, room - 1.5, height - 1.5, fill: classic ? #151521 : background)
+      rect(x0 + 1.5, 1.5, room - 3, height - 3, fill: classic ? #212134 : background)
+      if has {
+        sprite(artSeek, round(x0 + (room - knob) * f), 0, px, palette: seekPal)
+      }
+    }
+  }
+
+  // Winamp's volume knob (14 x 11): raised, with three engraved grips.
+  let artKnob = [
+    "KKKKKKKKKKKKKK",
+    "KWWWWWWWWWWWDK",
+    "KWFFFFFFFFFSDK",
+    "KWFFKFKFKFFSDK",
+    "KWFFKFKFKFFSDK",
+    "KWFFKFKFKFFSDK",
+    "KWFFKFKFKFFSDK",
+    "KWFFFFFFFFFSDK",
+    "KWSSSSSSSSSSDK",
+    "KDDDDDDDDDDDDK",
+    "KKKKKKKKKKKKKK"
+  ]
+
+  // Winamp's volume bar: a rounded groove that turns green, orange, then red as it goes up,
+  // under the knob bitmap. An invisible Slider on top does the touch handling.
+  component VolBar() {
+    Box {
+      fill: width
+      height: 22
+      Canvas {
+        fill: true
+        let lvl = v.muted ? 0 : (v.level ?? 0) / 100
+        let bar = classic ? (lvl < 0.4 ? [#1e5a12, #36a020, #48b830] : lvl < 0.75 ? [#9b5d21, #d97c1f, #db842f] : [#8a2410, #d03818, #e0522a]) : [accent, accent, accent]
+        let cy = height / 2
+        let px = 1.5
+        let kw = 14 * px
+        rect(0, cy - 4.5, width, 9, radius: 4.5, fill: classic ? #7f7f94 : border)
+        rect(0, cy - 4.5, width - 1.5, 7.5, radius: 4, fill: classic ? #151521 : background)
+        rect(1.5, cy - 3, width - 3, 6, radius: 3, fill: linear(0, cy - 3, 0, cy + 3, bar))
+        sprite(artKnob, round((width - kw) * lvl), round(cy - 5.5 * px), px, palette: {K: #000000, W: kPal.W, F: kPal.F, S: kPal.S, D: kPal.D})
+      }
+      // One step per volume step of the phone.
+      Slider { value: v.muted ? 0 : v.level; step: 100 / (v.steps ?? 15); live: true; fill: true; opacity: 0; onChange: volume(value) }
+    }
+  }
+
+  // The LCD's pixel grid laid over lit text: thin black lines every 3 dp leave the text dotted.
+  // They fall between the background dots, so those stay visible.
+  component LcdMask(inset = 2) {
+    Canvas {
+      fill: true
+      for k in range(floor((height - 2 * inset) / 2) + 1) {
+        rect(inset, inset + k * 2 - 0.25, width - 2 * inset, 0.5, fill: alpha(cLcd, 0.8))
+      }
+      for k in range(floor((width - 2 * inset) / 2) + 1) {
+        rect(inset + k * 2 - 0.25, inset, 0.5, height - 2 * inset, fill: alpha(cLcd, 0.8))
+      }
+    }
+  }
+
+  // Cover in a sunken frame, behind a coarse pixel grid and scanlines like a cheap 90s LCD.
+  component ArtPanel() {
+    Canvas {
+      rect(0, 0, width, height, fill: cHi)
+      rect(0, 0, width - 1.5, height - 1.5, fill: cLo)
+      rect(1.5, 1.5, width - 3, height - 3, fill: cLcd)
+      let x0 = 3
+      let w = width - 6
+      let h = height - 6
+      if has && m.art != null {
+        clip(x0, x0, w, h) {
+          image(m.art, x0, x0, w, h)
+          if classic { rect(x0, x0, w, h, fill: alpha(#00e800, 0.12)) }
+          for k in range(floor(w / 3) + 1) {
+            line(x0 + k * 3, x0, x0 + k * 3, x0 + h, stroke: alpha(cLcd, 0.55), width: 1)
+          }
+          for k in range(floor(h / 3) + 1) {
+            line(x0, x0 + k * 3, x0 + w, x0 + k * 3, stroke: alpha(cLcd, 0.55), width: 1)
+          }
+        }
+      } else {
+        let cx = width / 2
+        let cy = height / 2
+        let r = min(w, h) * 0.36
+        circle(cx, cy, r, stroke: cDim, width: 2)
+        circle(cx, cy, r * 0.28, stroke: cDim, width: 2)
+        arc(cx, cy, r * 0.7, 200, 50, stroke: cDim, width: 1.5)
+      }
+    }
+  }
+
+  // Eject opens the player when nothing is playing, else the app that's playing
+  // (or, without notification access, the setting that grants it).
+  component Eject() {
+    Box {
+      fill: true
+      if m.available && m.title == null && player != "" {
+        Box { fill: true; onTap: androidApp(player); Key { kind: "eject" } }
+      } else {
+        Box { fill: true; onTap: media("open"); Key { kind: "eject" } }
+      }
+    }
+  }
+
+  component Keys() {
+    Row {
+      gap: 3
+      Box { weight: 1; fill: height; onTap: media("previous"); Key { kind: "prev" } }
+      Box { weight: 1; fill: height; onTap: media("play"); Key { kind: "play"; lit: playing } }
+      Box { weight: 1; fill: height; onTap: media("pause"); Key { kind: "pause"; lit: has && !playing } }
+      // Android has no stop: this pauses too.
+      Box { weight: 1; fill: height; onTap: media("pause"); Key { kind: "stop" } }
+      Box { weight: 1; fill: height; onTap: media("next"); Key { kind: "next" } }
+      Spacer { width: 6 }
+      Eject { weight: 1; fill: height }
+    }
+  }
+
+  // Readouts laid out like Winamp's kbps / kHz / mono stereo line.
+  component Readouts(times = true, modes = true) {
+    Canvas {
+      height: 14
+      fill: width
+      let cy = height / 2
+      let on = has ? cLit : cDim
+      if times {
+        for bx in [0, 62] {
+          rect(bx, 0, 34, height, fill: cHi)
+          rect(bx, 0, 32.5, height - 1.5, fill: cLo)
+          rect(bx + 1.5, 1.5, 31, height - 3, fill: cLcd)
+        }
+        text(dur > 0 ? durText : "-:--", 31, cy, size: 9.5, bold: true, align: end, color: on)
+        text("len", 38, cy, size: 9, color: cLabel)
+        text(dur > 0 ? remText : "-:--", 93, cy, size: 9.5, bold: true, align: end, color: on)
+        text("left", 100, cy, size: 9, color: cLabel)
+        for bx in [0, 62] {
+          for k in range(7) {
+            rect(bx + 1, 1 + k * 2 - 0.25, 32, 0.5, fill: alpha(cLcd, 0.8))
+          }
+          for k in range(17) {
+            rect(bx + 1 + k * 2 - 0.25, 1, 0.5, height - 2, fill: alpha(cLcd, 0.8))
+          }
+        }
+      }
+      if modes {
+        if width > (times ? 190 : 100) {
+          text("mono", width - 46, cy, size: 9, bold: true, align: end, color: cOff)
+        }
+        if !times || width > 165 {
+          text("stereo", width, cy, size: 9, bold: true, align: end, color: playing ? cLit : cDim)
+        }
+      }
+    }
+  }
+
+  // Song title, scrolling when it doesn't fit.
+  component Marquee() {
+    Box {
+      height: 22
+      fill: width
+      Canvas {
+        fill: true
+        let est = bannerWidth
+        let room = width - 12
+        let loop = est + 48
+        rect(0, 0, width, height, fill: cHi)
+        rect(0, 0, width - 1.5, height - 1.5, fill: cLo)
+        rect(1.5, 1.5, width - 3, height - 3, fill: cLcd)
+        clip(5, 1, width - 10, height - 2) {
+          if est <= room {
+            text(banner, 6, height / 2, size: 12, bold: true, color: cLit)
+          } else {
+            let x = 6 - (time * 28) % loop
+            text(banner, x, height / 2, size: 12, bold: true, color: cLit)
+            text(banner, x + loop, height / 2, size: 12, bold: true, color: cLit)
+          }
+        }
+      }
+      LcdMask { }
+    }
+  }
+
+  // The tile's keys: Winamp-sized, grouped at the left, eject apart, the logo in the corner.
+  component TileKeys() {
+    Row {
+      gap: 2
+      align: center
+      Box { width: keyW; fill: height; onTap: media("previous"); Key { kind: "prev" } }
+      Box { width: keyW; fill: height; onTap: media("play"); Key { kind: "play"; lit: playing } }
+      Box { width: keyW; fill: height; onTap: media("pause"); Key { kind: "pause"; lit: has && !playing } }
+      // Android has no stop: this pauses too.
+      Box { width: keyW; fill: height; onTap: media("pause"); Key { kind: "stop" } }
+      Box { width: keyW; fill: height; onTap: media("next"); Key { kind: "next" } }
+      Spacer { width: 10 }
+      Eject { width: tall ? 42 : 32; height: tall ? 30 : 22 }
+      Spacer { weight: 1 }
+      Canvas {
+        width: 24
+        height: 22
+        path([[3, 15], [9, 5], [12, 12], [17, 3], [21, 9]], stroke: cStripe, width: 2, cap: round)
+        path([[3, 19], [9, 9], [12, 16], [17, 7], [21, 13]], stroke: alpha(cStripe, 0.45), width: 1.5, cap: round)
+      }
+    }
+  }
+
+  Box {
+  fill: true
+  // The window: a navy body with a light outer bevel.
+  Canvas {
+    fill: true
+    rect(0, 0, width, height, fill: linear(0, 0, 0, height, cFrame))
+    line(0.75, 0.75, width - 0.75, 0.75, stroke: classic ? #c9c9d0 : border, width: 1.5)
+    line(0.75, 0.75, 0.75, height - 0.75, stroke: classic ? #c9c9d0 : border, width: 1.5)
+    line(width - 0.75, 0.75, width - 0.75, height - 0.75, stroke: cEdge, width: 1.5)
+    line(0.75, height - 0.75, width - 0.75, height - 0.75, stroke: cEdge, width: 1.5)
+    // An engraved groove around everything under the title bar.
+    rect(3, 18, width - 6, height - 21, stroke: classic ? #101019 : background, width: 1.5)
+    rect(4.5, 19.5, width - 6, height - 21, stroke: classic ? #5f5f68 : border, width: 1.5)
+  }
+  Column {
+    gap: 0
+    fill: true
+
+    // Title bar: thin ribbed gold bars around the name, the logo left and the window buttons right.
+    // Tap it to switch between the classic skin and the Omarchy theme's colors.
+    Canvas {
+      height: 18
+      fill: width
+      onTap: skin = classic ? "omarchy" : "classic"
+      let cy = height / 2 + 1
+      path([[5, cy + 2], [8, cy - 3], [10.5, cy + 1.5], [13.5, cy - 4], [16, cy]], stroke: cStripe, width: 1.5, cap: round)
+      for seg in [[22, width / 2 - 36], [width / 2 + 36, width - 42]] {
+        rect(seg[0], cy - 3, seg[1] - seg[0], 6, radius: 1, fill: linear(0, cy - 3, 0, cy + 3, cGold))
+        line(seg[0] + 2, cy - 1, seg[1] - 2, cy - 1, stroke: alpha(#5a4418, 0.75), width: 0.8)
+        line(seg[0] + 2, cy + 1, seg[1] - 2, cy + 1, stroke: alpha(#5a4418, 0.75), width: 0.8)
+      }
+      text("RETRO AMP", width / 2 + 1, cy + 1, size: 9, bold: true, align: center, color: classic ? #101019 : background)
+      text("RETRO AMP", width / 2, cy, size: 9, bold: true, align: center, color: cTitle)
+      for k in range(3) {
+        let bx = width - 36 + k * 10
+        rect(bx, cy - 4, 8.5, 8.5, fill: kPal.D)
+        rect(bx, cy - 4, 7, 7, fill: kPal.W)
+        rect(bx + 1.5, cy - 2.5, 5.5, 5.5, fill: kPal.F)
+      }
+      line(width - 15, cy - 2, width - 11, cy + 2, stroke: cInk, width: 1.1)
+      line(width - 11, cy - 2, width - 15, cy + 2, stroke: cInk, width: 1.1)
+    }
+
+    Row {
+      gap: 6
+      weight: 1
+      fill: width
+      align: center
+      padding: [6, 6, 6, 4]
+
+      // Display: play state, time and a spectrum that only moves while playing. Tap for the big view.
+      Box {
+        width: compact ? 92 : 124
+        fill: height
+        onTap: screen()
+        // The LCD itself: frame, dot grid and the clutterbar letters. Static.
+        Canvas {
+          fill: true
+          rect(0, 0, width, height, fill: cHi)
+          rect(0, 0, width - 1.5, height - 1.5, fill: cLo)
+          rect(1.5, 1.5, width - 3, height - 3, fill: cLcd)
+          // Dot grid: dotted rows, then black columns cut them into 1 dp dots.
+          for gy in range(floor((height - 4) / 3)) {
+            rect(2, 3 + gy * 3, width - 4, 1, fill: cDot)
+          }
+          for gx in range(floor((width - 4) / 3) + 1) {
+            rect(1 + gx * 3, 2, 2, height - 4, fill: cLcd)
+          }
+        }
+        Canvas {
+          fill: true
+          let gy = min(19, height / 2)
+          if playing {
+            path([[15, gy - 5], [22, gy], [15, gy + 5]], closed: true, fill: cLit)
+          } else {
+            if has {
+              rect(15, gy - 5, 2.5, 10, fill: cLit)
+              rect(19.5, gy - 5, 2.5, 10, fill: cLit)
+            } else {
+              rect(15, gy - 4, 7, 8, fill: cDim)
+            }
+          }
+          // Seven-segment digits, unlit segments faintly visible.
+          let dw = compact ? 11 : 13
+          let dh = compact ? 18 : 22
+          let st = compact ? 2.2 : 2.6
+          let mm = floor(pos / 60) % 100
+          let ss = floor(pos) % 60
+          let ds = [floor(mm / 10), mm % 10, floor(ss / 10), ss % 10]
+          let x3 = width - 7 - dw
+          let x2 = x3 - 3 - dw
+          let x1 = x2 - 9 - dw
+          let xs = [x1 - 3 - dw, x1, x2, x3]
+          let dy = gy - dh / 2
+          let hs = dh / 2 - 1.5 * st
+          let segs = [[st, 0, dw - 2 * st, st], [dw - st, st, st, hs], [dw - st, dh / 2 + st / 2, st, hs], [st, dh - st, dw - 2 * st, st], [0, dh / 2 + st / 2, st, hs], [0, st, st, hs], [st, dh / 2 - st / 2, dw - 2 * st, st]]
+          let on = [[1,1,1,1,1,1,0], [0,1,1,0,0,0,0], [1,1,0,1,1,0,1], [1,1,1,1,0,0,1], [0,1,1,0,0,1,1], [1,0,1,1,0,1,1], [1,0,1,1,1,1,1], [1,1,1,0,0,0,0], [1,1,1,1,1,1,1], [1,1,1,1,0,1,1]]
+          for k in range(4) {
+            for sg, q in segs {
+              rect(xs[k] + sg[0], dy + sg[1], sg[2], sg[3], fill: on[ds[k]][q] == 1 ? (has ? cLit : cDim) : cSeg)
+            }
+          }
+          rect(x2 - 6, gy - dh * 0.25, st, st, fill: has ? cLit : cDim)
+          rect(x2 - 6, gy + dh * 0.25 - st, st, st, fill: has ? cLit : cDim)
+          // The spectrum is made up (Android shares no audio), but each song gets its own:
+          // the seed picks the bars' speeds, the tilt and a kick drum's tempo. It follows the volume.
+          if height > 62 {
+            let top = 40
+            let bottom = height - 5
+            let n = 19
+            let x0 = 14
+            let bw = (width - x0 - 5) / n
+            let room = bottom - top
+            let tempo = (84 + seed % 64) / 60 * 3.14159
+            let tilt = 0.25 + (seed % 7) * 0.06
+            // `time` is read only while playing, so a paused or idle tile draws once and stays still.
+            if playing {
+              let t = time
+              for i in range(n) {
+                let f = i / n
+                let sp = 1.7 + ((i * 37 + seed) % 11) * 0.29
+                let ph = i * 1.3 + (seed % 17) * 0.4
+                let a = abs(sin(t * sp + ph))
+                let b = 0.55 + 0.45 * sin(t * (0.7 + (seed % 5) * 0.12) + i * 0.5)
+                let kick = pow(abs(sin(t * tempo)), 8) * (1 - f)
+                let shape = 1 - f * tilt
+                let h = max(1.5, room * clamp((a * b * 0.75 + kick * 0.45) * shape, 0, 1) * gain)
+                rect(x0 + i * bw, bottom - h, bw - 1.5, h, fill: linear(0, bottom, 0, top, cVis))
+                // Winamp's peak caps, hanging above the bars on a slower swing.
+                if gain > 0 {
+                  let pk = max(h, room * shape * gain * (0.45 + 0.45 * abs(sin(t * sp * 0.35 + ph))))
+                  rect(x0 + i * bw, bottom - pk - 2.5, bw - 1.5, 1.5, fill: classic ? #a0a0b0 : foreground)
+                }
+              }
+            } else {
+              for i in range(n) {
+                rect(x0 + i * bw, bottom - 1, bw - 1.5, 1, fill: linear(0, bottom, 0, top, cVis))
+              }
+            }
+          }
+        }
+        LcdMask { }
+        // Winamp's clutterbar letters, grey and unmasked.
+        Canvas {
+          fill: true
+          for c, i in ["O", "A", "I", "D", "V"] {
+            text(c, 6, 9 + i * 8, size: 6.5, bold: true, align: center, color: cOff)
+          }
+        }
+      }
+
+      // Art and song info, with the volume running under both to the edge.
+      Column {
+        gap: 4
+        weight: 1
+        fill: height
+        // Tall tiles: the title runs across the top of the art and the info box.
+        if tall { Marquee { height: 22; fill: width } }
+        Row {
+          gap: 6
+          weight: 1
+          fill: width
+          align: center
+          // The art hangs from the top, level with the scrolling title.
+          if docked {
+            Column {
+              gap: 0
+              fill: height
+              Box { size: artSize; onTap: screen(); ArtPanel { } }
+              // Tall tiles: the times sit under the art, level with mono / stereo under the info box.
+              if tall {
+                Spacer { weight: 1 }
+                Readouts { modes: false; height: 14; width: artSize }
+              }
+            }
+          }
+          Column {
+            gap: short ? 3 : 4
+            weight: 1
+            fill: height
+
+            if !tall { Marquee { height: 22; fill: width } }
+            // Short and wide (6x2): the title on top, the readouts sitting on the volume bar at the bottom.
+            if short { Spacer { weight: 1 } }
+
+            if !short {
+              // Track info in the LCD: the song, artist and album, then length and time left.
+              Box {
+                weight: 1
+                fill: width
+                Canvas {
+                  fill: true
+                  rect(0, 0, width, height, fill: cHi)
+                  rect(0, 0, width - 1.5, height - 1.5, fill: cLo)
+                  rect(1.5, 1.5, width - 3, height - 3, fill: cLcd)
+                }
+                Column {
+                  gap: 2
+                  fill: true
+                  clip: true
+                  padding: [6, 4]
+                  Text { text: has ? m.title : (m.available ? "NO DISC" : "NO ACCESS"); fontSize: 14; bold: true; color: cLit; maxLines: 2 }
+                  Text { text: has ? m.artist ?? m.app ?? "" : (m.available ? ejectHint : "tap eject to allow access"); fontSize: 11; color: cLit; maxLines: 1 }
+                  if has && m.album != null {
+                    Text { text: m.album; fontSize: 10; color: cStripe; maxLines: 1 }
+                  }
+                  if tall && len(earlier) > 0 {
+                    Spacer { weight: 1 }
+                    Text { text: "EARLIER"; font: mono; bold: true; fontSize: 8; color: cOff }
+                    for h in earlier {
+                      Text { text: h.artist == "" ? h.title : "${h.artist} - ${h.title}"; fontSize: 10; color: alpha(cLit, 0.6); maxLines: 1 }
+                    }
+                  }
+                }
+                LcdMask { }
+              }
+            }
+            Readouts { times: !tall; height: 14; fill: width }
+            if !volUnderArt {
+              Row {
+                gap: 6
+                fill: width
+                align: center
+                Box { weight: 1; height: 22; VolBar { } }
+                // PL opens the full screen, with the history.
+                Box { width: 34; height: 15; onTap: screen(); PlButton { lit: hist != [] } }
+              }
+            }
+          }
+        }
+        if volUnderArt {
+          Row {
+            gap: 4
+            fill: width
+            align: center
+            Box { weight: 1; height: 22; VolBar { } }
+            // PL opens the full screen, with the history.
+            Box { width: 34; height: 15; onTap: screen(); PlButton { lit: hist != [] } }
+          }
+        }
+      }
+    }
+
+    SeekBar { height: 12; fill: width }
+    TileKeys { height: keysH; fill: width; padding: [6, 5, 6, 5] }
+  }
+  }
+
+  // Full screen: the cover, the controls and the songs played so far.
+  screen {
+    title: "my retro amp"
+    Column {
+      scroll: true
+      fill: true
+      gap: 10
+      padding: 12
+      background: cBody
+      align: center
+
+      // Settings switch
+      Row {
+        fill: width
+        align: center
+        Text { text: settings ? "PREFERENCES" : "NOW PLAYING"; font: mono; bold: true; fontSize: 12; color: cStripe; weight: 1 }
+        Box { width: 92; height: 26; onTap: settings = !settings; TextKey { label: settings ? "DONE" : "SETTINGS" } }
+      }
+
+      if settings {
+        // Which player eject opens when nothing is playing
+        Column {
+          gap: 4
+          fill: width
+          Text { text: "PLAYER"; font: mono; bold: true; fontSize: 11; color: cLabel }
+          Text { text: "Eject opens this app when nothing is playing. While something plays, it opens that app. Automatic picks the last app that played. Players with an icon are installed."; fontSize: 12; color: cOff }
+        }
+        Column {
+          gap: 0
+          fill: width
+          padding: [3, 3]
+          background: cLcd
+          border: 1.5
+          borderColor: cHi
+          radius: 0
+          // Automatic: follow the last app that played.
+          Row {
+            gap: 8
+            fill: width
+            align: center
+            padding: [8, 6]
+            background: !pinned ? alpha(cLit, 0.14) : cLcd
+            onTap: { pinned = false; player = m.package ?? player; playerName = m.app ?? m.package ?? playerName }
+            Canvas {
+              width: 9
+              height: 9
+              rect(0, 0, 9, 9, fill: cHi)
+              rect(0, 0, 7.5, 7.5, fill: cLo)
+              rect(1.5, 1.5, 6, 6, fill: !pinned ? cLit : cDim)
+            }
+            Column {
+              gap: 0
+              weight: 1
+              Text { text: "Automatic"; fontSize: 13; bold: !pinned; color: !pinned ? cTitle : cLit; maxLines: 1 }
+              Text { text: player != "" ? "last played: ${playerName}" : "nothing played yet"; font: mono; fontSize: 9; color: cOff; maxLines: 1 }
+            }
+          }
+          if m.package != null && find(players, x => x.pkg == m.package) == null {
+            PlayerRow { name: m.app ?? m.package; pkg: m.package }
+          }
+          for pl in players key pl.pkg {
+            PlayerRow { name: pl.name; pkg: pl.pkg }
+          }
+          if player != "" && find(players, x => x.pkg == player) == null && player != m.package {
+            PlayerRow { name: playerName; pkg: player }
+          }
+        }
+        Column {
+          gap: 4
+          fill: width
+          Text { text: "OTHER APP"; font: mono; bold: true; fontSize: 11; color: cLabel }
+          Text { text: "Type its package name (from its Play Store link, after id=) and press enter."; fontSize: 12; color: cOff }
+          Box {
+            fill: width
+            padding: [8, 4]
+            background: cLcd
+            border: 1.5
+            borderColor: cHi
+            radius: 0
+            Input { placeholder: "com.example.player"; color: cLit; fontSize: 13; clear: true; onSubmit: { player = value; playerName = value; pinned = true } }
+          }
+        }
+        Text { text: player == "" ? "Chosen: automatic (nothing played yet)" : pinned ? "Chosen: ${playerName}" : "Chosen: automatic (${playerName})"; font: mono; fontSize: 11; color: cStripe }
+      } else {
+
+        Box {
+          size: coverSize
+          background: cLcd
+          border: 2
+          borderColor: cHi
+          radius: 0
+          clip: true
+          align: center
+          if has && m.art != null {
+            Image { src: m.art; fit: cover; fill: true }
+          } else {
+            Text { text: has ? "NO COVER" : "NO DISC"; font: mono; bold: true; color: cDim; align: center }
+          }
+        }
+
+        Column {
+          gap: 2
+          fill: width
+          padding: [8, 6]
+          background: cLcd
+          border: 1
+          borderColor: cHi
+          radius: 0
+          Text { text: has ? m.title : "nothing playing"; bold: true; fontSize: 17; color: cLit; maxLines: 2 }
+          Text { text: has ? m.artist ?? m.app ?? "" : (m.available ? ejectHint : "tap eject to allow access"); fontSize: 13; color: cLit; maxLines: 1 }
+          if has && m.album != null {
+            Text { text: m.album; fontSize: 12; color: cStripe; maxLines: 1 }
+          }
+        }
+
+        Row {
+          gap: 8
+          fill: width
+          align: center
+          Text { text: clockText; font: mono; fontSize: 12; color: cTitle; width: 52; maxLines: 1 }
+          SeekBar { height: 12; weight: 1 }
+          Text { text: dur > 0 ? durText : "--:--"; font: mono; fontSize: 12; color: cTitle; width: 52; align: end; maxLines: 1 }
+        }
+
+        Keys { height: 44; fill: width }
+
+        Row {
+          gap: 6
+          fill: width
+          align: center
+          Text { text: "VOL"; fontSize: 11; font: mono; color: cTitle; width: 28 }
+          Box { weight: 1; height: 22; VolBar { } }
+          Text { text: v.muted ? "--" : "${round(v.level)}"; fontSize: 11; font: mono; color: cTitle; width: 28; align: end }
+        }
+
+        Row {
+          fill: width
+          align: center
+          Text { text: "PLAYLIST HISTORY"; font: mono; bold: true; fontSize: 12; color: cStripe; weight: 1 }
+          Text { text: "${len(hist)} songs"; font: mono; fontSize: 11; color: cTitle; width: 70; align: end }
+          Box { width: 56; height: 24; onTap: hist = []; align: center; background: classic ? #b8bfcf : surface; border: 1; borderColor: cEdge; radius: 0
+            Text { text: "CLEAR"; font: mono; bold: true; fontSize: 10; color: cInk; align: center }
+          }
+        }
+
+        Column {
+          gap: 0
+          fill: width
+          padding: [0, 4]
+          background: cLcd
+          border: 1
+          borderColor: cHi
+          radius: 0
+          if len(hist) == 0 {
+            Text { text: "no songs yet - they are added while this widget is on screen"; fontSize: 12; color: cDim; padding: [8, 8] }
+          }
+          // Tap a song to look it up in the app that played it.
+          for h, i in hist key h.id ?? "old-${h.at}-${i}" {
+            let cur = has && i == 0 && h.title == m.title
+            // The app that played it (or the chosen player) if it has a web search, else YouTube Music.
+            let q = replace(replace(replace(replace(replace(replace(replace(replace("${h.artist} ${h.title}", "%", "%25"), "&", "%26"), "#", "%23"), "+", "%2B"), "?", "%3F"), "=", "%3D"), "/", "%2F"), " ", "%20")
+            let via = find(players, x => x.pkg == (h.pkg ?? player)).search ?? "https://music.youtube.com/search?q="
+            Row {
+              gap: 6
+              fill: width
+              padding: [8, 5]
+              background: cur ? alpha(cLit, 0.18) : cLcd
+              onTap: url("${via}${q}")
+              Text { text: "${i + 1}."; font: mono; fontSize: 12; color: cur ? cTitle : cLit; width: 26; align: end }
+              Text { text: h.artist == "" ? h.title : "${h.artist} - ${h.title}"; fontSize: 13; color: cur ? cTitle : cLit; weight: 1; maxLines: 1 }
+              Text { text: h.at > 0 ? fmtTime(h.at, "HH:mm") : "--:--"; font: mono; fontSize: 11; color: cOff; width: 48; align: end; maxLines: 1 }
+            }
+          }
+        }
+      }
+    }
+  }
+}
