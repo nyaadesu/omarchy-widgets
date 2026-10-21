@@ -1,11 +1,11 @@
-widget "my retro amp" {
+widget "nostalgia player" {
   page: 2
   order: 3
   size: 6x3
   minSize: 4x2
   padding: 0
 
-  meta { owl: 5; description: "A late-90s style music player for whatever is playing on the phone: animated spectrum, scrolling title, cover and song history, in classic or theme colors."; version: "1.2"; license: "MIT"; category: "fun" }
+  meta { owl: 10; description: "A late-90s style music player for whatever is playing on the phone: animated spectrum, scrolling title, cover and song history, in classic or theme colors."; version: "1.2"; license: "MIT"; category: "fun" }
 
   // Android's media sessions (YouTube Music, or any other player) and the media volume.
   source m = android.media
@@ -26,6 +26,8 @@ widget "my retro amp" {
   when m.package != null { player = pinned ? player : m.package; playerName = pinned ? playerName : m.app ?? m.package }
   let ejectHint = player != "" ? "eject opens ${playerName}" : "play something on the phone"
   state settings = false
+  // The CLEAR button asks first: one stray tap would lose the whole history.
+  state confirmClear = false
   // Common players. The launcher can't list installed apps, so this is a fixed list plus a free field.
   let players = [
     {name: "Metrolist", pkg: "com.metrolist.music"},
@@ -374,8 +376,13 @@ widget "my retro amp" {
         rect(1.5, cy - 3, width - 3, 6, radius: 3, fill: linear(0, cy - 3, 0, cy + 3, bar))
         sprite(artKnob, round((width - kw) * lvl), round(cy - 5.5 * px), px, palette: {K: #000000, W: kPal.W, F: kPal.F, S: kPal.S, D: kPal.D})
       }
-      // One step per volume step of the phone.
-      Slider { value: v.muted ? 0 : v.level; step: 100 / (v.steps ?? 15); live: true; fill: true; opacity: 0; onChange: volume(value) }
+      // One step per volume step of the phone. The Slider's track starts 4 dp in from its ends and the
+      // knob's middle 10.5 dp in, so 6.5 dp either side lines the touch up with the drawn knob.
+      Box {
+        fill: true
+        padding: [6.5, 0]
+        Slider { value: v.muted ? 0 : v.level; step: 100 / (v.steps ?? 15); live: true; fill: true; opacity: 0; onChange: volume(value) }
+      }
     }
   }
 
@@ -564,13 +571,13 @@ widget "my retro amp" {
       onTap: skin = classic ? "omarchy" : "classic"
       let cy = height / 2 + 1
       path([[5, cy + 2], [8, cy - 3], [10.5, cy + 1.5], [13.5, cy - 4], [16, cy]], stroke: cStripe, width: 1.5, cap: round)
-      for seg in [[22, width / 2 - 36], [width / 2 + 36, width - 42]] {
+      for seg in [[22, width / 2 - 62], [width / 2 + 62, width - 42]] {
         rect(seg[0], cy - 3, seg[1] - seg[0], 6, radius: 1, fill: linear(0, cy - 3, 0, cy + 3, cGold))
         line(seg[0] + 2, cy - 1, seg[1] - 2, cy - 1, stroke: alpha(#5a4418, 0.75), width: 0.8)
         line(seg[0] + 2, cy + 1, seg[1] - 2, cy + 1, stroke: alpha(#5a4418, 0.75), width: 0.8)
       }
-      text("RETRO AMP", width / 2 + 1, cy + 1, size: 9, bold: true, align: center, color: classic ? #101019 : background)
-      text("RETRO AMP", width / 2, cy, size: 9, bold: true, align: center, color: cTitle)
+      text("NOSTALGIA PLAYER", width / 2 + 1, cy + 1, size: 9, bold: true, align: center, color: classic ? #101019 : background)
+      text("NOSTALGIA PLAYER", width / 2, cy, size: 9, bold: true, align: center, color: cTitle)
       for k in range(3) {
         let bx = width - 36 + k * 10
         rect(bx, cy - 4, 8.5, 8.5, fill: kPal.D)
@@ -788,7 +795,7 @@ widget "my retro amp" {
 
   // Full screen: the cover, the controls and the songs played so far.
   screen {
-    title: "my retro amp"
+    title: "nostalgia player"
     Column {
       scroll: true
       fill: true
@@ -865,7 +872,11 @@ widget "my retro amp" {
             border: 1.5
             borderColor: cHi
             radius: 0
-            Input { placeholder: "com.example.player"; color: cLit; fontSize: 13; clear: true; onSubmit: { player = value; playerName = value; pinned = true } }
+            Input { placeholder: "com.example.player"; color: cLit; fontSize: 13; clear: true; onSubmit: {
+              // An empty or blank entry changes nothing, so automatic keeps working.
+              let pkg = trim(value)
+              if pkg != "" { player = pkg; playerName = pkg; pinned = true }
+            } }
           }
         }
         Text { text: player == "" ? "Chosen: automatic (nothing played yet)" : pinned ? "Chosen: ${playerName}" : "Chosen: automatic (${playerName})"; font: mono; fontSize: 11; color: cStripe }
@@ -926,8 +937,31 @@ widget "my retro amp" {
           align: center
           Text { text: "PLAYLIST HISTORY"; font: mono; bold: true; fontSize: 12; color: cStripe; weight: 1 }
           Text { text: "${len(hist)} songs"; font: mono; fontSize: 11; color: cTitle; width: 70; align: end }
-          Box { width: 56; height: 24; onTap: hist = []; align: center; background: classic ? #b8bfcf : surface; border: 1; borderColor: cEdge; radius: 0
-            Text { text: "CLEAR"; font: mono; bold: true; fontSize: 10; color: cInk; align: center }
+          Box {
+            Box { width: 56; height: 24; onTap: confirmClear = true; align: center; background: classic ? #b8bfcf : surface; border: 1; borderColor: cEdge; radius: 0
+              Text { text: "CLEAR"; font: mono; bold: true; fontSize: 10; color: cInk; align: center }
+            }
+            Popup {
+              visible: confirmClear
+              onDismiss: confirmClear = false
+              position: below
+              align: end
+              gap: 4
+              background: cBody
+              border: 1.5
+              borderColor: cHi
+              radius: 0
+              Column {
+                gap: 8
+                padding: 10
+                Text { text: "Clear all ${len(hist)} songs?"; font: mono; fontSize: 12; color: cTitle }
+                Row {
+                  gap: 8
+                  Box { width: 76; height: 26; onTap: confirmClear = false; TextKey { label: "KEEP" } }
+                  Box { width: 76; height: 26; onTap: { hist = []; confirmClear = false }; TextKey { label: "CLEAR" } }
+                }
+              }
+            }
           }
         }
 
